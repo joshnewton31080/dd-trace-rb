@@ -255,6 +255,8 @@ RSpec.describe Datadog::Profiling::HttpTransport do
     end
 
     context 'via unix domain socket' do
+      before { pending 'reporting via unix domain socket is still work in progress' }
+
       let(:temporary_directory) { Dir.mktmpdir }
       let(:socket_path) { "#{temporary_directory}/rspec_unix_domain_socket" }
       let(:unix_domain_socket) { UNIXServer.new(socket_path) } # Closing the socket is handled by webrick
