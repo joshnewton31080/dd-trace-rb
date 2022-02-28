@@ -10,6 +10,9 @@
 // see exporter_as_ruby_object below for more details
 static VALUE exporter_class = Qnil;
 
+static VALUE ok_symbol = Qnil; // :ok in Ruby
+static VALUE error_symbol = Qnil; // :error in Ruby
+
 #define byte_slice_from_literal(string) ((ddprof_ffi_ByteSlice) {.ptr = (uint8_t *) "" string, .len = sizeof("" string) - 1})
 
 struct call_exporter_without_gvl_arguments {
@@ -68,6 +71,9 @@ void http_transport_init(VALUE profiling_module) {
   exporter_class = rb_define_class_under(http_transport_class, "Exporter", rb_cObject);
   // This prevents creation of the exporter class outside of our extension, see https://bugs.ruby-lang.org/issues/18007
   rb_undef_alloc_func(exporter_class);
+
+  ok_symbol = ID2SYM(rb_intern("ok"));
+  error_symbol = ID2SYM(rb_intern("error"));
 }
 
 inline static ddprof_ffi_ByteSlice byte_slice_from_ruby_string(VALUE string) {
@@ -117,13 +123,13 @@ static VALUE create_exporter(struct ddprof_ffi_EndpointV3 endpoint, VALUE tags_a
   if (exporter_result.tag != DDPROF_FFI_NEW_PROFILE_EXPORTER_V3_RESULT_OK) {
     VALUE failure_details = rb_str_new((char *) exporter_result.err.ptr, exporter_result.err.len);
     ddprof_ffi_NewProfileExporterV3Result_dtor(exporter_result); // Clean up result
-    rb_raise(rb_eRuntimeError, "Failed to create libddprof exporter: %+"PRIsVALUE, failure_details);
+    return rb_ary_new_from_args(2, error_symbol, failure_details);
   }
 
   VALUE exporter = exporter_to_ruby_object(exporter_result.ok);
   // No need to call the result dtor, since the only heap-allocated part is the exporter and we like that part
 
-  return exporter;
+  return rb_ary_new_from_args(2, ok_symbol, exporter);
 }
 
 static void convert_tags(ddprof_ffi_Tag *converted_tags, long tags_count, VALUE tags_as_array) {
@@ -209,10 +215,10 @@ static VALUE _native_do_export(
   if (result.tag != DDPROF_FFI_SEND_RESULT_HTTP_RESPONSE) {
     VALUE failure_details = rb_str_new((char *) result.failure.ptr, result.failure.len);
     ddprof_ffi_Buffer_reset(&result.failure); // Clean up result
-    rb_raise(rb_eRuntimeError, "Failed to report profile: %+"PRIsVALUE, failure_details);
+    return rb_ary_new_from_args(2, error_symbol, failure_details);
   }
 
-  return UINT2NUM(result.http_response.code);
+  return rb_ary_new_from_args(2, ok_symbol, UINT2NUM(result.http_response.code));
 }
 
 static ddprof_ffi_Request *build_request(

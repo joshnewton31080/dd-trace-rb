@@ -12,16 +12,22 @@ module Datadog
 
         tags_as_array = tags.to_a
 
-        @libddprof_exporter =
+        status, result =
           if site && api_key && agentless_allowed?
             create_agentless_exporter(site, api_key, tags_as_array)
           else
             create_agent_exporter(base_url_from(agent_settings), tags_as_array)
           end
+
+        if status == :ok
+          @libddprof_exporter = result
+        else # :error
+          raise(ArgumentError, "Failed to initialize transport: #{result}")
+        end
       end
 
       def export(flush)
-        do_export(
+        status, result = do_export(
           libddprof_exporter: @libddprof_exporter,
           upload_timeout_milliseconds: @upload_timeout_milliseconds,
 
@@ -39,6 +45,19 @@ module Datadog
           code_provenance_file_name: flush.code_provenance_file_name,
           code_provenance_data: flush.code_provenance_data,
         )
+
+        if status == :ok
+          if (200..299).include?(result)
+            Datadog.logger.debug('Successfully reported profiling data')
+            true
+          else
+            Datadog.logger.error("Failed to report profiling data: server returned unexpected HTTP #{result} status code")
+            false
+          end
+        else
+          Datadog.logger.error("Failed to report profiling data: #{result}")
+          false
+        end
       end
 
       private

@@ -73,6 +73,7 @@ RSpec.describe Datadog::Profiling::HttpTransport do
       it 'creates an agent exporter with the given settings' do
         expect(described_class)
           .to receive(:_native_create_agent_exporter).with('http://192.168.0.1:12345/', tags_as_array)
+          .and_return([:ok, :dummy_exporter])
 
         http_transport
       end
@@ -83,6 +84,7 @@ RSpec.describe Datadog::Profiling::HttpTransport do
         it 'creates an agent exporter that reports over https' do
           expect(described_class)
             .to receive(:_native_create_agent_exporter).with('https://192.168.0.1:12345/', tags_as_array)
+            .and_return([:ok, :dummy_exporter])
 
           http_transport
         end
@@ -112,6 +114,7 @@ RSpec.describe Datadog::Profiling::HttpTransport do
       it 'ignores them and creates an agent exporter using the agent_settings' do
         expect(described_class)
           .to receive(:_native_create_agent_exporter).with('http://192.168.0.1:12345/', tags_as_array)
+          .and_return([:ok, :dummy_exporter])
 
         http_transport
       end
@@ -126,6 +129,7 @@ RSpec.describe Datadog::Profiling::HttpTransport do
         it 'creates an agentless exporter with the given site and api key' do
           expect(described_class)
             .to receive(:_native_create_agentless_exporter).with(site, api_key, tags_as_array)
+            .and_return([:ok, :dummy_exporter])
 
           http_transport
         end
@@ -136,7 +140,7 @@ RSpec.describe Datadog::Profiling::HttpTransport do
       before { expect(agent_settings).to receive(:port).and_return(1_000_000_000.to_s) }
 
       it do
-        expect { http_transport }.to raise_error(RuntimeError, /Failed to create/)
+        expect { http_transport }.to raise_error(ArgumentError, /Failed to initialize transport/)
       end
     end
   end
@@ -163,9 +167,38 @@ RSpec.describe Datadog::Profiling::HttpTransport do
         pprof_data,
         code_provenance_file_name,
         code_provenance_data
-      )
+      ).and_return([:ok, 200])
 
       export
+    end
+
+    context 'when export was successful' do
+      before do
+        expect(described_class).to receive(:_native_do_export).and_return([:ok, 200])
+      end
+
+      it 'logs a debug message' do
+        expect(Datadog.logger).to receive(:debug).with('Successfully reported profiling data')
+
+        export
+      end
+
+      it { is_expected.to be true }
+    end
+
+    context 'when failed' do
+      before do
+        expect(described_class).to receive(:_native_do_export).and_return([:ok, 500])
+        allow(Datadog.logger).to receive(:error)
+      end
+
+      it 'logs an error message' do
+        expect(Datadog.logger).to receive(:error)
+
+        export
+      end
+
+      it { is_expected.to be false }
     end
   end
 
@@ -228,9 +261,9 @@ RSpec.describe Datadog::Profiling::HttpTransport do
     end
 
     it 'exports data successfully to the datadog agent' do
-      http_status_code = http_transport.export(flush)
+      success = http_transport.export(flush)
 
-      expect(http_status_code).to be 200
+      expect(success).to be true
       expect(request.request_uri.to_s).to eq 'http://127.0.0.1:6006/profiling/v1/input'
 
       expect(request.header).to include(
@@ -288,9 +321,9 @@ RSpec.describe Datadog::Profiling::HttpTransport do
       end
 
       it 'exports data successfully to the datadog agent' do
-        http_status_code = http_transport.export(flush)
+        success = http_transport.export(flush)
 
-        expect(http_status_code).to be 200
+        expect(success).to be true
 
         expect(request.header).to include(
           'content-type' => [%r{^multipart/form-data; boundary=(.+)}],
@@ -320,45 +353,41 @@ RSpec.describe Datadog::Profiling::HttpTransport do
         @server_thread.join
       end
 
-      it do # TODO: Improve?
-        expect { http_transport.export(flush) }.to raise_error(RuntimeError, /Failed to report profile/)
+      it 'logs an error' do
+        expect(Datadog.logger).to receive(:error).with(/error trying to connect/)
+
+        http_transport.export(flush)
       end
     end
 
     context 'when request times out' do
       let(:upload_timeout_seconds) { 0.001 }
-      let(:server_proc) do
-        proc do |req, res|
-          sleep 0.05
-        end
-      end
+      let(:server_proc) { proc { sleep 0.05 } }
 
-      it do # TODO: Improve?
-        expect { http_transport.export(flush) }.to raise_error(RuntimeError, /operation timed out/)
+      it 'logs an error' do
+        expect(Datadog.logger).to receive(:error).with(/timed out/)
+
+        http_transport.export(flush)
       end
     end
 
     context 'when server returns a 4xx failure' do
-      let(:server_proc) do
-        proc do |req, res|
-          res.status = 418
-        end
-      end
+      let(:server_proc) { proc { |_req, res| res.status = 418 } }
 
-      it do # TODO: Improve
-        expect(http_transport.export(flush)).to be 418
+      it 'logs an error' do
+        expect(Datadog.logger).to receive(:error).with(/unexpected HTTP 418/)
+
+        http_transport.export(flush)
       end
     end
 
     context 'when server returns a 5xx failure' do
-      let(:server_proc) do
-        proc do |req, res|
-          res.status = 503
-        end
-      end
+      let(:server_proc) { proc { |_req, res| res.status = 503 } }
 
-      it do # TODO: Improve
-        expect(http_transport.export(flush)).to be 503
+      it 'logs an error' do
+        expect(Datadog.logger).to receive(:error).with(/unexpected HTTP 503/)
+
+        http_transport.export(flush)
       end
     end
   end
