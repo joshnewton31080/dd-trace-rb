@@ -6,7 +6,7 @@
 // This file implements the native bits of the Datadog::Profiling::HttpTransport class
 
 // Datadog::Profiling::HttpTransport::Exporter
-// This is used to wrap a native-level pointer to a libddprof exporter;
+// This is used to wrap a native pointer to a libddprof exporter as a Ruby object of this class;
 // see exporter_as_ruby_object below for more details
 static VALUE exporter_class = Qnil;
 
@@ -107,7 +107,6 @@ static VALUE _native_create_agent_exporter(VALUE self, VALUE base_url, VALUE tag
 }
 
 static VALUE create_exporter(struct ddprof_ffi_EndpointV3 endpoint, VALUE tags_as_array) {
-
   long tags_count = rb_array_len(tags_as_array);
   ddprof_ffi_Tag converted_tags[tags_count];
 
@@ -207,10 +206,12 @@ static VALUE _native_do_export(
   // We'll release the Global VM Lock while we're calling send, so that the Ruby VM can continue to work while this
   // is pending
   struct call_exporter_without_gvl_arguments args = {.exporter = exporter, .request = request};
-  rb_thread_call_without_gvl(call_exporter_without_gvl, &args, NULL, NULL); // TODO: How to interrupt!?
+  // TODO: We don't provide a function to interrupt reporting, which means this thread will be blocked until
+  // call_exporter_without_gvl returns.
+  rb_thread_call_without_gvl(call_exporter_without_gvl, &args, NULL, NULL);
   ddprof_ffi_SendResult result = args.result;
 
-  // TODO: Validate that request is being correctly freed, not entirely convinced that libddprof does it automatically
+  // The request does not need to be freed as libddprof takes care of it.
 
   if (result.tag != DDPROF_FFI_SEND_RESULT_HTTP_RESPONSE) {
     VALUE failure_details = rb_str_new((char *) result.failure.ptr, result.failure.len);
@@ -270,9 +271,7 @@ static ddprof_ffi_Request *build_request(
   ddprof_ffi_Request *request =
     ddprof_ffi_ProfileExporterV3_build(exporter, start, finish, slice_files, timeout_milliseconds);
 
-  // At this point, the request contains copies of all data from the Ruby side, so we can clean up
-  ddprof_ffi_Buffer_free(pprof_buffer);
-  ddprof_ffi_Buffer_free(code_provenance_buffer);
+  // We don't need to free pprof_buffer nor code_provenance_buffer because libddprof takes care of it.
 
   return request;
 }

@@ -1,4 +1,4 @@
-# typed: true
+# typed: false
 
 module Datadog
   module Profiling
@@ -34,7 +34,7 @@ module Datadog
           # why "timespec"?
           # libddprof represents time using POSIX's struct timespec, see
           # https://www.gnu.org/software/libc/manual/html_node/Time-Types.html
-          # aka they separate the seconds part from the nanoseconds part
+          # aka it represents the seconds part separate from the nanoseconds part
           start_timespec_seconds: flush.start.tv_sec,
           start_timespec_nanoseconds: flush.start.tv_nsec,
           finish_timespec_seconds: flush.finish.tv_sec,
@@ -47,7 +47,7 @@ module Datadog
         )
 
         if status == :ok
-          if (200..299).include?(result)
+          if (200..299).cover?(result)
             Datadog.logger.debug('Successfully reported profiling data')
             true
           else
@@ -63,19 +63,29 @@ module Datadog
       private
 
       def base_url_from(agent_settings)
-        if agent_settings.uds_path
+        case agent_settings.adapter
+        when Datadog::Transport::Ext::HTTP::ADAPTER
+          "#{agent_settings.ssl ? 'https' : 'http'}://#{agent_settings.hostname}:#{agent_settings.port}/"
+        when Datadog::Transport::Ext::UnixSocket::ADAPTER
           "unix://#{agent_settings.uds_path}"
         else
-          "#{agent_settings.ssl ? 'https' : 'http'}://#{agent_settings.hostname}:#{agent_settings.port}/"
+          raise ArgumentError, "Unexpected adapter: #{agent_settings.adapter}"
         end
       end
 
-      # FIXME: Re-evaluate our plans for these before merging this anywhere. We should at least provide clearer error
-      # messages and next steps for customers; the current messages are too cryptic. Ideally, we would still support
-      # Unix Domain Socket for reporting data.
       def validate_agent_settings(agent_settings)
+        supported_adapters = [Datadog::Transport::Ext::HTTP::ADAPTER, Datadog::Transport::Ext::UnixSocket::ADAPTER]
+        unless supported_adapters.include?(agent_settings.adapter)
+          raise ArgumentError, "Unsupported transport configuration for profiling: Adapter #{agent_settings.adapter} " \
+            ' is not supported'
+        end
+
+        # FIXME: Currently the transport_configuration_proc is the only public API available for enable reporting
+        # via unix domain sockets. Not supporting it means not supporting Unix Domain Sockets in practice.
+        # This will need to be fixed before we make HttpTransport the default option for reporting profiles.
         if agent_settings.deprecated_for_removal_transport_configuration_proc
-          raise ArgumentError, 'Unsupported agent configuration for profiling: custom c.tracer.transport_options is currently unsupported.'
+          raise ArgumentError,
+                'Unsupported agent configuration for profiling: custom c.tracer.transport_options is currently unsupported.'
         end
       end
 

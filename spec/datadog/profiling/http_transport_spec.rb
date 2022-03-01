@@ -1,4 +1,5 @@
-# typed: false
+# typed: ignore
+
 require 'datadog/profiling/spec_helper'
 
 require 'datadog/profiling/http_transport'
@@ -11,8 +12,8 @@ require 'socket'
 # between the Ruby code and the native methods, and thus in this class we have a bunch of tests to make sure the
 # native methods are invoked correctly.
 #
-# We also have a integration specs, where we exercise libddprof and ensure that things come out of libddprof
-# as we expect.
+# We also have "integration" specs, where we exercise the Ruby code together with the C code and libddprof to ensure
+# that things come out of libddprof as we expected.
 RSpec.describe Datadog::Profiling::HttpTransport do
   before { skip_if_profiling_not_supported(self) }
 
@@ -27,22 +28,25 @@ RSpec.describe Datadog::Profiling::HttpTransport do
   end
 
   let(:agent_settings) do
-    instance_double(
-      Datadog::Core::Configuration::AgentSettingsResolver::AgentSettings,
+    Datadog::Core::Configuration::AgentSettingsResolver::AgentSettings.new(
       adapter: adapter,
-      uds_path: nil,
+      uds_path: uds_path,
       ssl: ssl,
-      hostname: '192.168.0.1',
-      port: '12345',
+      hostname: hostname,
+      port: port,
       deprecated_for_removal_transport_configuration_proc: deprecated_for_removal_transport_configuration_proc,
+      timeout_seconds: nil,
     )
   end
   let(:adapter) { Datadog::Transport::Ext::HTTP::ADAPTER }
+  let(:uds_path) { nil }
   let(:ssl) { false }
+  let(:hostname) { '192.168.0.1' }
+  let(:port) { '12345' }
   let(:deprecated_for_removal_transport_configuration_proc) { nil }
   let(:site) { nil }
   let(:api_key) { nil }
-  let(:tags) { {'tag_a' => 'value_a', 'tag_b' => 'value_b'} }
+  let(:tags) { { 'tag_a' => 'value_a', 'tag_b' => 'value_b' } }
   let(:upload_timeout_seconds) { 123 }
 
   let(:flush) do
@@ -65,12 +69,13 @@ RSpec.describe Datadog::Profiling::HttpTransport do
   let(:code_provenance_data) { 'the_code_provenance_data' }
 
   describe '#initialize' do
-    let(:tags_as_array) { [['tag_a', 'value_a'], ['tag_b', 'value_b']] }
+    let(:tags_as_array) { [%w[tag_a value_a], %w[tag_b value_b]] }
 
     context 'when agent_settings are provided' do
       it 'creates an agent exporter with the given settings' do
         expect(described_class)
-          .to receive(:_native_create_agent_exporter).with('http://192.168.0.1:12345/', tags_as_array)
+          .to receive(:_native_create_agent_exporter)
+          .with('http://192.168.0.1:12345/', tags_as_array)
           .and_return([:ok, :dummy_exporter])
 
         http_transport
@@ -81,18 +86,25 @@ RSpec.describe Datadog::Profiling::HttpTransport do
 
         it 'creates an agent exporter that reports over https' do
           expect(described_class)
-            .to receive(:_native_create_agent_exporter).with('https://192.168.0.1:12345/', tags_as_array)
+            .to receive(:_native_create_agent_exporter)
+            .with('https://192.168.0.1:12345/', tags_as_array)
             .and_return([:ok, :dummy_exporter])
 
           http_transport
         end
       end
 
-      xcontext 'when agent_settings requests an unix domain socket' do
+      context 'when agent_settings requests a unix domain socket' do
         let(:adapter) { Datadog::Transport::Ext::UnixSocket::ADAPTER }
+        let(:uds_path) { '/var/run/datadog/apm.socket' }
 
-        it do
-          expect { http_transport }.to raise_error(ArgumentError, /Unix Domain Sockets are currently unsupported/)
+        it 'creates an agent exporter that reports over a unix domain socket' do
+          expect(described_class)
+            .to receive(:_native_create_agent_exporter)
+            .with('unix:///var/run/datadog/apm.socket', tags_as_array)
+            .and_return([:ok, :dummy_exporter])
+
+          http_transport
         end
       end
 
@@ -103,6 +115,14 @@ RSpec.describe Datadog::Profiling::HttpTransport do
           expect { http_transport }.to raise_error(ArgumentError, /c.tracer.transport_options is currently unsupported/)
         end
       end
+
+      context 'when agent_settings requests an unsupported transport' do
+        let(:adapter) { :test }
+
+        it do
+          expect { http_transport }.to raise_error(ArgumentError, /Unsupported transport/)
+        end
+      end
     end
 
     context 'when additionally site and api_key are provided' do
@@ -111,7 +131,8 @@ RSpec.describe Datadog::Profiling::HttpTransport do
 
       it 'ignores them and creates an agent exporter using the agent_settings' do
         expect(described_class)
-          .to receive(:_native_create_agent_exporter).with('http://192.168.0.1:12345/', tags_as_array)
+          .to receive(:_native_create_agent_exporter)
+          .with('http://192.168.0.1:12345/', tags_as_array)
           .and_return([:ok, :dummy_exporter])
 
         http_transport
@@ -126,7 +147,8 @@ RSpec.describe Datadog::Profiling::HttpTransport do
 
         it 'creates an agentless exporter with the given site and api key' do
           expect(described_class)
-            .to receive(:_native_create_agentless_exporter).with(site, api_key, tags_as_array)
+            .to receive(:_native_create_agentless_exporter)
+            .with(site, api_key, tags_as_array)
             .and_return([:ok, :dummy_exporter])
 
           http_transport
@@ -135,7 +157,7 @@ RSpec.describe Datadog::Profiling::HttpTransport do
     end
 
     context 'when an invalid configuration is provided' do
-      before { expect(agent_settings).to receive(:port).and_return(1_000_000_000.to_s) }
+      let(:port) { 1_000_000_000.to_s }
 
       it do
         expect { http_transport }.to raise_error(ArgumentError, /Failed to initialize transport/)
@@ -155,7 +177,7 @@ RSpec.describe Datadog::Profiling::HttpTransport do
       finish_timespec_nanoseconds = 123456789
 
       expect(described_class).to receive(:_native_do_export).with(
-        anything, # libddprof_exporter
+        kind_of(Datadog::Profiling::HttpTransport::Exporter),
         upload_timeout_milliseconds,
         start_timespec_seconds,
         start_timespec_nanoseconds,
@@ -246,79 +268,11 @@ RSpec.describe Datadog::Profiling::HttpTransport do
 
     let(:request) { messages.first }
 
-    let(:agent_settings) do
-      instance_double(
-        Datadog::Core::Configuration::AgentSettingsResolver::AgentSettings,
-        adapter: adapter,
-        uds_path: nil,
-        ssl: ssl,
-        hostname: '127.0.0.1',
-        port: '6006',
-        deprecated_for_removal_transport_configuration_proc: nil,
-      )
-    end
+    let(:hostname) { '127.0.0.1' }
+    let(:port) { '6006' }
 
-    it 'exports data successfully to the datadog agent' do
-      success = http_transport.export(flush)
-
-      expect(success).to be true
-      expect(request.request_uri.to_s).to eq 'http://127.0.0.1:6006/profiling/v1/input'
-
-      expect(request.header).to include(
-        'content-type' => [%r{^multipart/form-data; boundary=(.+)}],
-      )
-
-      # check body
-      boundary = request['content-type'][%r{^multipart/form-data; boundary=(.+)}, 1]
-      body = WEBrick::HTTPUtils.parse_form_data(StringIO.new(request.body), boundary)
-
-      expect(body).to include(
-        'version' => '3',
-        'family' => 'ruby',
-        'start' => start_timestamp,
-        'end' => end_timestamp,
-        "data[#{pprof_file_name}]" => pprof_data,
-        "data[#{code_provenance_file_name}]" => code_provenance_data,
-      )
-
-      tags = body['tags[]'].list
-      expect(tags).to include('tag_a:value_a', 'tag_b:value_b')
-    end
-
-    context 'via unix domain socket' do
-      before { pending 'reporting via unix domain socket is still work in progress' }
-
-      let(:temporary_directory) { Dir.mktmpdir }
-      let(:socket_path) { "#{temporary_directory}/rspec_unix_domain_socket" }
-      let(:unix_domain_socket) { UNIXServer.new(socket_path) } # Closing the socket is handled by webrick
-      let(:server) do
-        server = WEBrick::HTTPServer.new(
-          DoNotListen: true,
-          Logger: log,
-          AccessLog: access_log,
-          StartCallback: -> { init_signal.push(1) }
-        )
-        server.listeners << unix_domain_socket
-        server
-      end
-      let(:adapter) { Datadog::Transport::Ext::UnixSocket::ADAPTER }
-      let(:agent_settings) do
-        instance_double(
-          Datadog::Core::Configuration::AgentSettingsResolver::AgentSettings,
-          uds_path: socket_path,
-          deprecated_for_removal_transport_configuration_proc: nil,
-        )
-      end
-
-      after do
-        begin
-          FileUtils.remove_entry(temporary_directory)
-        rescue Errno::ENOENT => _e
-          # Do nothing, it's ok
-        end
-      end
-
-      it 'exports data successfully to the datadog agent' do
+    shared_examples 'correctly reports profiling data' do
+      it 'correctly reports profiling data' do
         success = http_transport.export(flush)
 
         expect(success).to be true
@@ -343,6 +297,44 @@ RSpec.describe Datadog::Profiling::HttpTransport do
         tags = body['tags[]'].list
         expect(tags).to include('tag_a:value_a', 'tag_b:value_b')
       end
+    end
+
+    include_examples 'correctly reports profiling data'
+
+    it 'exports data via http to the agent url' do
+      http_transport.export(flush)
+
+      expect(request.request_uri.to_s).to eq 'http://127.0.0.1:6006/profiling/v1/input'
+    end
+
+    context 'via unix domain socket' do
+      before { pending 'Support for reporting via unix domain socket in libddprof is still work in progress' }
+
+      let(:temporary_directory) { Dir.mktmpdir }
+      let(:socket_path) { "#{temporary_directory}/rspec_unix_domain_socket" }
+      let(:unix_domain_socket) { UNIXServer.new(socket_path) } # Closing the socket is handled by webrick
+      let(:server) do
+        server = WEBrick::HTTPServer.new(
+          DoNotListen: true,
+          Logger: log,
+          AccessLog: access_log,
+          StartCallback: -> { init_signal.push(1) }
+        )
+        server.listeners << unix_domain_socket
+        server
+      end
+      let(:adapter) { Datadog::Transport::Ext::UnixSocket::ADAPTER }
+      let(:uds_path) { socket_path }
+
+      after do
+        begin
+          FileUtils.remove_entry(temporary_directory)
+        rescue Errno::ENOENT => _e
+          # Do nothing, it's ok
+        end
+      end
+
+      include_examples 'correctly reports profiling data'
     end
 
     context 'when agent is down' do
