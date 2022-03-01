@@ -14,9 +14,7 @@ require 'socket'
 # We also have a integration specs, where we exercise libddprof and ensure that things come out of libddprof
 # as we expect.
 RSpec.describe Datadog::Profiling::HttpTransport do
-  # FIXME: Enable better testing on macOS
-  #before { skip_if_profiling_not_supported(self) }
-  before { ensure_profiling_is_available }
+  before { skip_if_profiling_not_supported(self) }
 
   subject(:http_transport) do
     described_class.new(
