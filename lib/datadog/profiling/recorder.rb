@@ -8,6 +8,9 @@ module Datadog
     class Recorder
       attr_reader :max_size
 
+      # Profiles with duration less than this will not be reported
+      PROFILE_DURATION_THRESHOLD_SECONDS = 1
+
       # TODO: Why does the Recorder directly reference the `code_provenance_collector`?
       #
       # For starters, this is weird/a problem because the relationship is supposed to go in the other direction:
@@ -24,11 +27,18 @@ module Datadog
       # [libddprof](https://github.com/datadog/libddprof)-based implementation, and thus I don't think massive refactors
       # are worth it before moving to libddprof.
 
-      def initialize(event_classes, max_size, code_provenance_collector:, last_flush_time: Time.now.utc)
+      def initialize(
+        event_classes,
+        max_size,
+        code_provenance_collector:,
+        last_flush_time: Time.now.utc,
+        minimum_duration: PROFILE_DURATION_THRESHOLD_SECONDS
+      )
         @buffers = {}
         @last_flush_time = last_flush_time
         @max_size = max_size
         @code_provenance_collector = code_provenance_collector
+        @minimum_duration = minimum_duration
 
         # Add a buffer for each class
         event_classes.each do |event_class|
@@ -72,14 +82,32 @@ module Datadog
           end.compact
         end
 
-        code_provenance = @code_provenance_collector.refresh.generate_json if @code_provenance_collector
+        return if event_count.zero? # We don't want to report empty profiles
 
-        OldFlush.new(
+        if duration_below_threshold?(start, finish)
+          Datadog.logger.debug do
+            "Skipped exporting profiling events as profile duration is below minimum (#{event_count} events skipped)"
+          end
+
+          return
+        end
+
+        encoded_pprof = Datadog::Profiling::Encoding::Profile::Protobuf.encode(
+          event_count: event_count,
+          event_groups: event_groups,
           start: start,
           finish: finish,
-          event_groups: event_groups,
-          event_count: event_count,
-          code_provenance: code_provenance,
+        )
+
+        code_provenance = @code_provenance_collector.refresh.generate_json if @code_provenance_collector
+
+        Flush.new(
+          start: start,
+          finish: finish,
+          pprof_file_name: Datadog::Profiling::Ext::Transport::HTTP::PPROF_DEFAULT_FILENAME,
+          pprof_data: Core::Utils::Compression.gzip(encoded_pprof),
+          code_provenance_file_name: Datadog::Profiling::Ext::Transport::HTTP::CODE_PROVENANCE_FILENAME,
+          code_provenance_data: (Core::Utils::Compression.gzip(code_provenance) if code_provenance),
         )
       end
 
@@ -110,6 +138,10 @@ module Datadog
 
         # Return event groups, start time, finish time
         [result, start, @last_flush_time]
+      end
+
+      def duration_below_threshold?(start, finish)
+        (finish - start) < @minimum_duration
       end
     end
   end
