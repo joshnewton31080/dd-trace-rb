@@ -1,6 +1,9 @@
 # typed: true
+
 require 'datadog/profiling/buffer'
 require 'datadog/profiling/flush'
+require 'datadog/profiling/encoding/profile'
+require 'datadog/core/utils/compression'
 
 module Datadog
   module Profiling
