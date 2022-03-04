@@ -1,5 +1,8 @@
 # typed: true
 
+require 'datadog/profiling/ext'
+require 'datadog/core/utils/compression'
+
 module Datadog
   module Profiling
     # Records profiling data gathered by the multiple collectors in a `Flush`.
@@ -18,21 +21,18 @@ module Datadog
       attr_reader \
         :pprof_collector,
         :code_provenance_collector,
-        :minimum_duration,
-        :logger
+        :minimum_duration
 
       public
 
       def initialize(
         pprof_collector:,
         code_provenance_collector:,
-        minimum_duration: PROFILE_DURATION_THRESHOLD_SECONDS,
-        logger: Datadog.logger
+        minimum_duration: PROFILE_DURATION_THRESHOLD_SECONDS
       )
         @pprof_collector = pprof_collector
         @code_provenance_collector = code_provenance_collector
         @minimum_duration = minimum_duration
-        @logger = logger
       end
 
       def flush
@@ -41,7 +41,7 @@ module Datadog
         return if uncompressed_pprof.nil? # We don't want to report empty profiles
 
         if duration_below_threshold?(start, finish)
-          logger.debug('Skipped exporting profiling events as profile duration is below minimum')
+          Datadog.logger.debug('Skipped exporting profiling events as profile duration is below minimum')
           return
         end
 
@@ -51,10 +51,10 @@ module Datadog
           start: start,
           finish: finish,
           pprof_file_name: Datadog::Profiling::Ext::Transport::HTTP::PPROF_DEFAULT_FILENAME,
-          pprof_data: Core::Utils::Compression.gzip(uncompressed_pprof),
+          pprof_data: Datadog::Core::Utils::Compression.gzip(uncompressed_pprof),
           code_provenance_file_name: Datadog::Profiling::Ext::Transport::HTTP::CODE_PROVENANCE_FILENAME,
           code_provenance_data:
-            (Core::Utils::Compression.gzip(uncompressed_code_provenance) if uncompressed_code_provenance),
+            (Datadog::Core::Utils::Compression.gzip(uncompressed_code_provenance) if uncompressed_code_provenance),
         )
       end
 
