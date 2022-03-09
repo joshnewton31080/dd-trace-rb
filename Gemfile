@@ -3,7 +3,7 @@ source 'https://rubygems.org'
 gemspec
 
 # Development dependencies
-gem 'addressable', '~> 2.4.0' # locking transitive dependency of webmock
+gem 'addressable', '~> 2.8.0' # locking transitive dependency of webmock
 gem 'appraisal', '~> 2.2'
 gem 'benchmark-ips', '~> 2.8'
 gem 'benchmark-memory', '~> 0.1'
